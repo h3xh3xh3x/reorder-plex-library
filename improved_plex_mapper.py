@@ -12,6 +12,7 @@ from contextlib import contextmanager
 import sys
 import csv
 import tempfile
+import configparser
 
 # Configure logging
 logging.basicConfig(
@@ -761,6 +762,18 @@ class ResultDisplay:
         print(f"{title:<30} {lib_id:<3} {file_mtime_str:<20} {mapped:<6} {exists:<8} {filename:<25}")
 
 
+def get_sqlite_executable(config_path="sqlite.conf"):
+    # Read the sqlite executable path from config file
+    default_exec = "plex-sqlite"
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    return line
+    return default_exec
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plex tool with path mapping correction.")
     parser.add_argument("--db", type=str, 
@@ -851,10 +864,20 @@ def main():
                 print(f"\nPreparing to update {len(valid_updates)} files with real modification times...")
                 
                 if args.use_plex_sqlite:
-                    print("\nNote: Using Plex SQLite requires the Plex Media Server SQLite binary.")
-                    print("You may need to run commands like:")
-                    print(f'  "~/Plex Media Server/Plex SQLite" "{args.db}" ".backup {args.output}"')
-                    print("Then apply updates using the Plex SQLite binary.")
+                    sqlite_exec = get_sqlite_executable()
+                    if not shutil.which(sqlite_exec):
+                        print(f"Could not find Plex SQLite executable: {sqlite_exec}. Please check ./sqlite.conf or your PATH.")
+                        return 1
+                    # Use the executable for backup/export
+                    print(f"Using Plex SQLite executable: {sqlite_exec}")
+                    # Example: run backup
+                    backup_cmd = [sqlite_exec, args.db, f".backup {args.output}"]
+                    import subprocess
+                    result = subprocess.run(backup_cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        print("Backup failed:", result.stderr)
+                        return 1
+                    print("Backup completed. Now apply updates using the Plex SQLite binary if needed.")
                     return 0
                 
                 success = db_manager.update_database_copy(
