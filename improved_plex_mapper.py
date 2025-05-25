@@ -11,6 +11,7 @@ from pathlib import Path
 from contextlib import contextmanager
 import sys
 import csv
+import tempfile
 
 # Configure logging
 logging.basicConfig(
@@ -23,16 +24,33 @@ logger = logging.getLogger(__name__)
 class PlexPathMapper:
     """Handle path mapping operations for Plex database paths."""
     
-    def __init__(self, path_mappings: Optional[List[Tuple[str, str]]] = None):
+    def __init__(self, path_mappings: Optional[List[Tuple[str, str]]] = None, config_path: str = "path_mappings.conf"):
         """
         Initialize the path mapper.
         
         Args:
             path_mappings: List of (old_prefix, new_prefix) tuples
+            config_path: Path to config file for path mappings
         """
-        self.path_mappings = path_mappings or [
-            ("/h3x/", "/home/h3x/"),
-        ]
+        if path_mappings is not None:
+            self.path_mappings = path_mappings
+        else:
+            self.path_mappings = self._load_mappings_from_file(config_path)
+            if not self.path_mappings:
+                raise ValueError("No path mappings found in config file and none provided")
+    
+    def _load_mappings_from_file(self, config_path: str) -> List[Tuple[str, str]]:
+        mappings = []
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):  # skip comments/empty
+                        continue
+                    parts = line.split(",", 1)
+                    if len(parts) == 2:
+                        mappings.append( (parts[0].strip(), parts[1].strip()) )
+        return mappings
     
     def map_path(self, plex_path: str) -> str:
         """
@@ -869,12 +887,21 @@ class TestPlexPathMapper(unittest.TestCase):
     """Test cases for PlexPathMapper class."""
     
     def setUp(self):
-        self.mapper = PlexPathMapper()
-    
+        # Create a temporary config file for path mappings
+        self.temp_dir = tempfile.mkdtemp()
+        self.config_path = os.path.join(self.temp_dir, "path_mappings.conf")
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            f.write("/unittest/,/home/unittest/\n")
+        self.mapper = PlexPathMapper(config_path=self.config_path)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
     def test_map_path_with_mapping(self):
         """Test path mapping with matching prefix."""
-        result = self.mapper.map_path("/h3x/movies/movie.mkv")
-        self.assertEqual(result, "/home/h3x/movies/movie.mkv")
+        result = self.mapper.map_path("/unittest/movies/movie.mkv")
+        self.assertEqual(result, "/home/unittest/movies/movie.mkv")
     
     def test_map_path_without_mapping(self):
         """Test path mapping without matching prefix."""
@@ -892,8 +919,11 @@ class TestPlexPathMapper(unittest.TestCase):
         self.assertIsNone(result)
     
     def test_custom_mappings(self):
-        """Test with custom path mappings."""
-        custom_mapper = PlexPathMapper([("/old/", "/new/")])
+        """Test with custom path mappings via config file."""
+        # Write a new config file with a different mapping
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            f.write("/old/,/new/\n")
+        custom_mapper = PlexPathMapper(config_path=self.config_path)
         result = custom_mapper.map_path("/old/file.txt")
         self.assertEqual(result, "/new/file.txt")
     
@@ -918,10 +948,10 @@ class TestPlexPathMapper(unittest.TestCase):
         mock_is_file.side_effect = [False, True]
         mock_stat.return_value = Mock(st_mtime=1234567890)
         
-        mtime, path, exists = self.mapper.get_file_info("/h3x/file.mkv")
+        mtime, path, exists = self.mapper.get_file_info("/unittest/file.mkv")
         
         self.assertIsNotNone(mtime)
-        self.assertEqual(path, "/home/h3x/file.mkv")
+        self.assertEqual(path, "/home/unittest/file.mkv")
         self.assertTrue(exists)
     
     @patch('pathlib.Path.is_file')
@@ -1049,7 +1079,7 @@ class TestPlexDatabaseManager(unittest.TestCase):
             "INSERT INTO metadata_items VALUES (1, 'Test Movie', 1234567890, 1234567890, 1234567890, 1)"
         )
         cursor.execute("INSERT INTO media_items VALUES (1, 1)")
-        cursor.execute("INSERT INTO media_parts VALUES (1, 1, '/h3x/movies/test.mkv')")
+        cursor.execute("INSERT INTO media_parts VALUES (1, 1, '/unittest/movies/test.mkv')")
         
         conn.commit()
         conn.close()
@@ -1073,7 +1103,7 @@ class TestPlexDatabaseManager(unittest.TestCase):
         """Test getting recent media entries."""
         mock_get_file_info.return_value = (
             datetime.fromtimestamp(1234567890),
-            "/home/h3x/movies/test.mkv",
+            "/home/unittest/movies/test.mkv",
             True
         )
         
@@ -1114,7 +1144,7 @@ class TestPlexDatabaseManager(unittest.TestCase):
         # Insert a second file for nonzero test
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO media_parts VALUES (?, ?, ?)", (2, 1, '/h3x/movies/another.mkv'))
+        cursor.execute("INSERT INTO media_parts VALUES (?, ?, ?)", (2, 1, '/unittest/movies/another.mkv'))
         conn.commit()
         conn.close()
 
@@ -1144,7 +1174,7 @@ class TestResultDisplay(unittest.TestCase):
             'file_mtime': datetime(2023, 1, 1, 12, 0, 0),
             'path_mapped': True,
             'file_exists': True,
-            'actual_path': '/home/h3x/movies/test.mkv'
+            'actual_path': '/home/unittest/movies/test.mkv'
         }]
         
         ResultDisplay.display_entries(entries)
