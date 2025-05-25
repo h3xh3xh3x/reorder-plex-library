@@ -395,10 +395,16 @@ class PlexDatabaseManager:
         
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT file FROM media_parts WHERE file IS NOT NULL AND LENGTH(file) > 0 LIMIT ?;",
-                (limit,)
-            )
+            sql = ""
+            if limit > 0:
+                cursor.execute(
+                    "SELECT file FROM media_parts WHERE file IS NOT NULL AND LENGTH(file) > 0 LIMIT ?;",
+                    (limit,)
+                )
+            else:
+                cursor.execute(
+                    "SELECT file FROM media_parts WHERE file IS NOT NULL AND LENGTH(file) > 0;"
+                )
             paths = [row[0] for row in cursor.fetchall()]
         
         logger.info(f"Analyzing {len(paths)} file paths...")
@@ -429,7 +435,7 @@ class PlexDatabaseManager:
             if mapped_path != plex_path:
                 logger.info(f"      -> {mapped_path}")
         
-        success_rate = ((results['original_exists'] + results['mapped_exists']) / results['total'] * 100)
+        success_rate = ((results['original_exists'] + results['mapped_exists']) / results['total'] * 100) if results['total'] > 0 else 0.0
         results['success_rate'] = success_rate
         
         logger.info(f"\nResults:")
@@ -1102,6 +1108,22 @@ class TestPlexDatabaseManager(unittest.TestCase):
         self.assertEqual(entry['title'], "Test")
         self.assertIsInstance(entry['added_at'], datetime)
         self.assertEqual(entry['added_at'].year, 2009)  # 1234567890 = Feb 2009
+
+    def test_analyze_path_mappings_limit(self):
+        """Test analyze_path_mappings with limit=0 and nonzero."""
+        # Insert a second file for nonzero test
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO media_parts VALUES (?, ?, ?)", (2, 1, '/h3x/movies/another.mkv'))
+        conn.commit()
+        conn.close()
+
+        # Test with limit=1 (should return 1 path)
+        results = self.db_manager.analyze_path_mappings(limit=1)
+        self.assertEqual(results['total'], 1)
+        # Test with limit=0 (should return all paths, i.e., 2)
+        results = self.db_manager.analyze_path_mappings(limit=0)
+        self.assertEqual(results['total'], 2)
 
 
 class TestResultDisplay(unittest.TestCase):
